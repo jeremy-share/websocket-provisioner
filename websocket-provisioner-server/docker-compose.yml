@@ -5,5 +5,8 @@ services:
     build: .
     volumes:
       - ./:/opt/project
+    environment:
+      WS_CLIENT_AUTH_0: 1234abc
+      WS_CLIENT_AUTH_1: abcd123
     ports:
       - "80:80"
