@@ -1,0 +1,9 @@
+version: "3.7"
+
+services:
+  websocket-provisioner-server:
+    build: .
+    volumes:
+      - ./:/opt/project
+    ports:
+      - "80:80"

@@ -1,0 +1,15 @@
+version: "3.7"
+
+services:
+  websocket-provisioner-client-unix:
+    build: .
+    volumes:
+      - ./:/opt/project
+    environment:
+      RUN_SCRIPT: "/opt/project/run.sh"
+      DETAIL_CMD_1_HOSTNAME: "echo -n $${HOSTNAME}"
+      DETAIL_CMD_2_HARDWARE_ID: "dmidecode -s system-uuid"
+      DETAIL_CMD_3_HARDWARE_SERIAL: "dmidecode -s system-serial-number"
+      DETAIL_CMD_4_BIOS_VENDOR: "dmidecode -s bios-vendor"
+    network_mode: host
+    privileged: true

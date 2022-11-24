@@ -1,0 +1,3 @@
+python-dotenv
+python-socketio[asyncio_client]
+pyinstaller
