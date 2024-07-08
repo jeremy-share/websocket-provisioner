@@ -1,8 +1,8 @@
 docker-build:
-	docker-compose build --pull
+	docker compose build --pull
 
 up:
-	docker-compose up -d
+	docker compose up -d
 
 down:
-	docker-compose down
+	docker compose down
