@@ -7,6 +7,7 @@ services:
       - ./:/opt/project
     environment:
       RUN_SCRIPT: "/opt/project/run.sh"
+      WS_ENDPOINT: "ws://172.17.0.1/ws"
       WS_AUTH_TOKEN: "abcd123"
       DETAIL_CMD_1_HOSTNAME: "echo -n $${HOSTNAME}"
       DETAIL_CMD_2_HARDWARE_ID: "dmidecode -s system-uuid"

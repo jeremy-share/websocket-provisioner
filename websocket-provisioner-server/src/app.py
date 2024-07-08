@@ -19,6 +19,7 @@ logging.basicConfig(level=os.getenv("LOGLEVEL", "INFO").upper())
 
 @dataclass
 class ClientDetails:
+    sid: str
     websocket: WebSocket
     auth_id: int  # auth token id
     connected_on: datetime
@@ -62,7 +63,6 @@ async def msg_all_clients(message: str, data=None):
         try:
             await client_details.websocket.send_text(json.dumps({"event": message, "data": data}))
         except Exception:
-            # Catch any single client send exceptions and report
             logger.exception(f"Failed to send message to client {client_sid}")
 
 
@@ -77,7 +77,7 @@ async def clients_txt():
     results = ["=== CLIENTS ===".ljust(120, "=")]
 
     fields = {
-        "sid": 30,
+        "sid": 38,
         "auth_id": 10,
         "connected_on": 30,
         "run_last_result_on": 30,
@@ -130,10 +130,17 @@ async def client_sid_run(sid: str, request: Request):
     logger.info("Sending 'run' to sid='%s' run_id='%s'", sid, identity)
     if sid not in client_sids():
         return PlainTextResponse("Failed, SID not found!", status_code=400)
-    await clients[sid].websocket.send_text(json.dumps({"event": "run", "data": {"id": identity, "settings": settings}}))
+    await clients[sid].websocket.send_text(json.dumps({
+        "event": "run",
+        "data": {
+            "id": identity,
+            "settings": settings,
+        },
+    }))
     return "Sent!"
 
 
+@app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
 
@@ -155,8 +162,9 @@ async def websocket_endpoint(websocket: WebSocket):
 
     # Valid!
     auth_id = valid_auth_codes[client_auth_token]
-    sid = str(uuid.uuid4())
-    clients[sid] = ClientDetails(
+    client_sid = str(uuid.uuid4())
+    clients[client_sid] = ClientDetails(
+        sid=client_sid,
         websocket=websocket,
         auth_id=auth_id,
         connected_on=datetime.now(),
@@ -167,33 +175,31 @@ async def websocket_endpoint(websocket: WebSocket):
         while True:
             message = await websocket.receive_text()
             data = json.loads(message)
-            event = data.get("event")
+            event = data.get("event", "unset")
             if event == "ping":
-                logger.info(f"WebSocket received 'ping' from client '{sid}'")
+                logger.info(f"WebSocket received 'ping' from {client_sid=}")
                 await websocket.send_text(json.dumps({"event": "pong"}))
+            elif event == "pong":
+                logger.info(f"Received pong from {client_sid=}")
             elif event == "details":
-                logger.info(f"WebSocket received 'details' from client '{sid}'")
-                clients[sid].details_on = datetime.now()
-                clients[sid].details = data.get("data")
+                logger.info(f"WebSocket received 'details' from {client_sid=}")
+                clients[client_sid].details_on = datetime.now()
+                clients[client_sid].details = data.get("data")
             elif event == "run_result":
-                logger.info(f"WebSocket received 'run_result' from client '{sid}'")
-                clients[sid].run_last_result = data.get("data")
-                clients[sid].run_last_result_on = datetime.now()
-            elif event == "refresh":
-                logger.info(f"WebSocket received 'refresh' from client '{sid}'")
-                await websocket.send_text(json.dumps({"event": "details", "data": clients[sid].details}))
-            elif event == "run":
-                logger.info(f"WebSocket received 'run' from client '{sid}'")
-                await websocket.send_text(json.dumps({"event": "run_result", "data": {"id": data.get("id"), "result": True, "message": "Run command executed"}}))
+                logger.info(f"WebSocket received 'run_result' from {client_sid=}")
+                clients[client_sid].run_last_result = data.get("data")
+                clients[client_sid].run_last_result_on = datetime.now()
+            else:
+                logger.error(f"WS: Unknown {event=}")
 
     except WebSocketDisconnect:
-        logger.info(f"WebSocket client disconnected '{sid}'")
-        if sid in clients:
-            del clients[sid]
+        logger.info(f"WebSocket client disconnected '{client_sid}'")
+        if client_sid in clients:
+            del clients[client_sid]
     except Exception as e:
         logger.exception(f"Unexpected error: {e}")
-        if sid in clients:
-            del clients[sid]
+        if client_sid in clients:
+            del clients[client_sid]
 
 
 def ask_clients_refresh():
@@ -201,12 +207,6 @@ def ask_clients_refresh():
 
 
 scheduler.add_job(ask_clients_refresh, 'interval', seconds=config.CLIENT_REFRESH_INTERVAL, max_instances=1)
-
-
-@app.websocket("/ws")
-async def websocket_endpoint_entrypoint(websocket: WebSocket):
-    await websocket_endpoint(websocket)
-
 
 if __name__ == '__main__':
     import uvicorn

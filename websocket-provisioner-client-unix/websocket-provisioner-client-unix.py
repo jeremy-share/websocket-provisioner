@@ -24,9 +24,10 @@ async def ws_send_details(ws):
     await ws.send(json.dumps({"event": "details", "data": data}))
 
 
-async def handle_message(ws, message):
-    data = json.loads(message)
-    event = data.get("event")
+async def handle_message(ws, ws_message_string):
+    websocket_message = json.loads(ws_message_string)
+    event = websocket_message.get("event", "unset")
+    data = websocket_message.get("data", {})
 
     if event == "refresh":
         logger.info("WS: 'refresh' received")
@@ -37,7 +38,14 @@ async def handle_message(ws, message):
         async def respond(result: bool, message: str):
             logger.info("Responding to 'run' result")
             identity: str = data.get("id")
-            await ws.send(json.dumps({"event": "run_result", "data": {"id": identity, "result": result, "message": message}}))
+            await ws.send(json.dumps({
+                "event": "run_result",
+                "data": {
+                    "id": identity,
+                    "result": result,
+                    "message": message,
+                },
+            }))
 
         try:
             run_script = getenv("RUN_SCRIPT")
@@ -55,6 +63,8 @@ async def handle_message(ws, message):
     elif event == "ping":
         logger.info("WS: 'ping' received")
         await ws.send(json.dumps({"event": "pong"}))
+    else:
+        logger.error(f"WS: Unknown {event=}")
 
 
 async def init_details(ws):
