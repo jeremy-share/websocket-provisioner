@@ -176,10 +176,7 @@ async def websocket_endpoint(websocket: WebSocket):
             message = await websocket.receive_text()
             data = json.loads(message)
             event = data.get("event", "unset")
-            if event == "ping":
-                logger.info(f"WebSocket received 'ping' from {client_sid=}")
-                await websocket.send_text(json.dumps({"event": "pong"}))
-            elif event == "pong":
+            if event == "pong":
                 logger.info(f"Received pong from {client_sid=}")
             elif event == "details":
                 logger.info(f"WebSocket received 'details' from {client_sid=}")
