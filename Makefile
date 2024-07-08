@@ -17,3 +17,9 @@ demo-client-list:
 
 demo-client-run:
 	(cd websocket-provisioner-server && make client-run)
+
+demo-client-ping:
+	(cd websocket-provisioner-server && make client-ping)
+
+demo-client-refresh:
+	(cd websocket-provisioner-server && make client-refresh)
