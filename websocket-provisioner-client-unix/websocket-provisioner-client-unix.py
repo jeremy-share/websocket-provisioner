@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import os
 import subprocess
 from os import getenv, environ
 from os.path import realpath, dirname, isfile
@@ -89,10 +90,20 @@ async def main():
         "AUTH_TOKEN": getenv("WS_AUTH_TOKEN", "")
     }
 
-    async with websockets.connect(ws_endpoint, extra_headers=ws_headers) as ws:
-        await init_details(ws)
-        async for message in ws:
-            await handle_message(ws, message)
+    while True:
+        try:
+            async with websockets.connect(ws_endpoint, extra_headers=ws_headers) as ws:
+                await init_details(ws)
+                async for message in ws:
+                    await handle_message(ws, message)
+        except websockets.exceptions.ConnectionClosedError as e:
+            logger.error(f"WebSocket connection closed: {e}")
+        except Exception as e:
+            logger.exception(f"Unexpected error: {e}")
+
+        retry_delay = int(os.getenv("WS_RETRY_DELAY", "5"))
+        logger.info(f"Reconnecting in {retry_delay} seconds...")
+        await asyncio.sleep(retry_delay)
 
 
 if __name__ == "__main__":
