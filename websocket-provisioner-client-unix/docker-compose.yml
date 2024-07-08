@@ -7,6 +7,7 @@ services:
       - ./:/opt/project
     environment:
       RUN_SCRIPT: "/opt/project/run.sh"
+      WS_AUTH_TOKEN: "abcd123"
       DETAIL_CMD_1_HOSTNAME: "echo -n $${HOSTNAME}"
       DETAIL_CMD_2_HARDWARE_ID: "dmidecode -s system-uuid"
       DETAIL_CMD_3_HARDWARE_SERIAL: "dmidecode -s system-serial-number"

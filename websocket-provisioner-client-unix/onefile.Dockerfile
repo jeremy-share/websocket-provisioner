@@ -1,4 +1,4 @@
-FROM python:3.9
+FROM python:3.11
 
 RUN     DEBIAN_FRONTEND=noninteractive apt-get update \
     &&  DEBIAN_FRONTEND=noninteractive apt-get install -y \

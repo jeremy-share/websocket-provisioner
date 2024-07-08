@@ -1,61 +1,46 @@
+import os
 import uuid
-
-import flask
-from apscheduler.schedulers.background import BackgroundScheduler
-from flask import Flask, make_response
-from flask_apscheduler import APScheduler
-from flask_socketio import SocketIO
-from os import getenv, environ as os_environ
+import asyncio
 import logging
-import eventlet
-
-from dotenv import load_dotenv
-from os.path import realpath, dirname
-from dataclasses import dataclass
 from typing import Dict, List, Any, Optional
-import socket
 import json
 from datetime import datetime
-
-# https://stackoverflow.com/questions/71474916/is-it-possible-to-call-socketio-emit-from-a-job-scheduled-via-apscheduler-backg
-eventlet.monkey_patch(thread=True, time=True)
+from dataclasses import dataclass
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
+from fastapi.responses import PlainTextResponse
+from dotenv import load_dotenv
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 logger = logging.getLogger(__name__)
-root_dir = realpath(dirname(realpath(__file__)) + "/..")
+root_dir = os.path.realpath(os.path.dirname(os.path.realpath(__file__)) + "/..")
 load_dotenv(dotenv_path=f"{root_dir}/.env")
-logging.basicConfig(level=getenv("LOGLEVEL", "INFO").upper())
+logging.basicConfig(level=os.getenv("LOGLEVEL", "INFO").upper())
 
 
 @dataclass
 class ClientDetails:
-    sid: str
+    websocket: WebSocket
     auth_id: int  # auth token id
     connected_on: datetime
-    # details = Client supplied details
     details_on: datetime = None
-    details: Optional[Dict[str, Any]] = None
+    details: Optional[Dict[str, Any]] = None  # Client supplied details
     run_last_result_on: datetime = None
     run_last_result: Optional[Dict[str, Any]] = None
 
 
 class Config:
     SCHEDULER_API_ENABLED = False
-    RUN_PORT = getenv("RUN_PORT", 80)
-    RUN_HOST = getenv("RUN_HOST", "0.0.0.0")
-    CLIENT_REFRESH_INTERVAL = getenv("CLIENT_REFRESH_INTERVAL", 60)
+    RUN_PORT = os.getenv("RUN_PORT", 80)
+    RUN_HOST = os.getenv("RUN_HOST", "0.0.0.0")
+    CLIENT_REFRESH_INTERVAL = os.getenv("CLIENT_REFRESH_INTERVAL", 60)
 
 
-app = Flask(__name__)
-app.config.from_object(Config())
-sio = SocketIO(app, cors_allowed_origins="*")
-
-hostname = socket.gethostname()
-scheduler = BackgroundScheduler()
-flask_scheduler = APScheduler(scheduler)
-flask_scheduler.init_app(app)
-logger.info("")
+config = Config()
+app = FastAPI()
 
 clients: Dict[str, ClientDetails] = {}
+scheduler = AsyncIOScheduler()
+scheduler.start()
 
 
 def client_sids() -> List[str]:
@@ -66,30 +51,28 @@ def get_auth_codes() -> Dict[str, int]:
     key: str
     value: str
     codes = {}
-    for key, value in dict(os_environ).items():
+    for key, value in dict(os.environ).items():
         if key.startswith("WS_CLIENT_AUTH_"):
             codes[value] = int(key.removeprefix("WS_CLIENT_AUTH_"))
     return codes
 
 
-def msg_all_clients(message: str, data=None):
-    for client in list(clients.keys()):
+async def msg_all_clients(message: str, data=None):
+    for client_sid, client_details in list(clients.items()):
         try:
-            sio.emit(message, data, to=client)
+            await client_details.websocket.send_text(json.dumps({"event": message, "data": data}))
         except Exception:
             # Catch any single client send exceptions and report
-            logger.exception("")
+            logger.exception(f"Failed to send message to client {client_sid}")
 
 
-@app.route("/")
-def index():
-    response = make_response("Hi!", 200)
-    response.mimetype = "text/plain"
-    return response
+@app.get("/", response_class=PlainTextResponse)
+async def index():
+    return "Hi!"
 
 
-@app.route("/clients.txt")
-def clients_txt():
+@app.get("/clients.txt", response_class=PlainTextResponse)
+async def clients_txt():
     logger.info("WEB: Getting all clients")
     results = ["=== CLIENTS ===".ljust(120, "=")]
 
@@ -122,111 +105,109 @@ def clients_txt():
                 client_row += value
         results.append(client_row)
 
-    response = make_response("\n".join(results), 200)
-    response.mimetype = "text/plain"
-    return response
+    return "\n".join(results)
 
 
-@app.route("/clients/ping")
-def clients_ping_all():
-    logger.info("WEB: Sending 'ping' to all SIO clients")
-    msg_all_clients("ping")
-    response = make_response("Sent!", 200)
-    response.mimetype = "text/plain"
-    return response
+@app.get("/clients/ping", response_class=PlainTextResponse)
+async def clients_ping_all():
+    logger.info("WEB: Sending 'ping' to all WebSocket clients")
+    await msg_all_clients("ping")
+    return "Sent!"
 
 
-@app.route("/clients/refresh")
-def clients_info():
-    logger.info("WEB: Sending 'refresh' to all SIO clients")
-    msg_all_clients("refresh")
-    response = make_response("Sent!", 200)
-    response.mimetype = "text/plain"
-    return response
+@app.get("/clients/refresh", response_class=PlainTextResponse)
+async def clients_info():
+    logger.info("WEB: Sending 'refresh' to all WebSocket clients")
+    await msg_all_clients("refresh")
+    return "Sent!"
 
 
-@app.route("/client/<sid>/run", methods=['PUT'])
-def client_sid_run(sid):
+@app.put("/client/{sid}/run", response_class=PlainTextResponse)
+async def client_sid_run(sid: str, request: Request):
     logger.info("WEB: Sending 'run' to a client")
     identity = str(uuid.uuid4())
-    settings = flask.request.get_json()
+    settings = await request.json()
     logger.info("Sending 'run' to sid='%s' run_id='%s'", sid, identity)
     if sid not in client_sids():
-        response = make_response("Failed, SID not found!", 400)
-        response.mimetype = "text/plain"
-        return response
-    sio.emit("run", {"id": identity, "settings": settings}, to=sid)
-    response = make_response("Sent!", 200)
-    response.mimetype = "text/plain"
-    return response
+        return PlainTextResponse("Failed, SID not found!", status_code=400)
+    await clients[sid].websocket.send_text(json.dumps({"event": "run", "data": {"id": identity, "settings": settings}}))
+    return "Sent!"
 
 
-@sio.event
-def connect():
-    sid = flask.request.sid
-    logger.info("SIO client connected '%s'", sid)
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
 
-    client_auth_token = flask.request.headers.get("AUTH_TOKEN", "")
+    logger.info("Client connected")
+    client_auth_token = websocket.headers.get("AUTH_TOKEN", "")
 
     # Token min length and is set
     if len(client_auth_token) <= 5:
-        logger.info("SIO Client rejected due to length of or missing auth token")
-        sio.disconnect(sid)
+        logger.info("WebSocket Client rejected due to length of or missing auth token")
+        await websocket.close()
         return
 
     # Token verification
     valid_auth_codes = get_auth_codes()
     if client_auth_token not in valid_auth_codes.keys():
-        logger.info("SIO Client rejected due to auth key not being correct")
-        sio.disconnect(sid)
+        logger.info("WebSocket Client rejected due to auth key not being correct")
+        await websocket.close()
         return
 
     # Valid!
     auth_id = valid_auth_codes[client_auth_token]
+    sid = str(uuid.uuid4())
     clients[sid] = ClientDetails(
-        sid=sid,
+        websocket=websocket,
         auth_id=auth_id,
         connected_on=datetime.now(),
     )
-    logger.info(f"SIO Client is valid using key '%d'", auth_id)
+    logger.info(f"WebSocket Client is valid using key '{auth_id}'")
 
+    try:
+        while True:
+            message = await websocket.receive_text()
+            data = json.loads(message)
+            event = data.get("event")
+            if event == "ping":
+                logger.info(f"WebSocket received 'ping' from client '{sid}'")
+                await websocket.send_text(json.dumps({"event": "pong"}))
+            elif event == "details":
+                logger.info(f"WebSocket received 'details' from client '{sid}'")
+                clients[sid].details_on = datetime.now()
+                clients[sid].details = data.get("data")
+            elif event == "run_result":
+                logger.info(f"WebSocket received 'run_result' from client '{sid}'")
+                clients[sid].run_last_result = data.get("data")
+                clients[sid].run_last_result_on = datetime.now()
+            elif event == "refresh":
+                logger.info(f"WebSocket received 'refresh' from client '{sid}'")
+                await websocket.send_text(json.dumps({"event": "details", "data": clients[sid].details}))
+            elif event == "run":
+                logger.info(f"WebSocket received 'run' from client '{sid}'")
+                await websocket.send_text(json.dumps({"event": "run_result", "data": {"id": data.get("id"), "result": True, "message": "Run command executed"}}))
 
-@sio.event
-def disconnect():
-    sid = flask.request.sid
-    logger.info("SIO client disconnected '%s'", sid)
-    if sid in clients:
-        del clients[sid]
-
-
-@sio.event
-def pong():
-    sid = flask.request.sid
-    logger.info("SIO received 'pong' from client '%s'", sid)
-
-
-@sio.event
-def details(device_details):
-    sid = flask.request.sid
-    logger.info("SIO received 'details' from client '%s'", sid)
-    clients[sid].details_on = datetime.now()
-    clients[sid].details = device_details
-
-
-@sio.event
-def run_result(run_result_details: Dict[str, Any]):
-    sid = flask.request.sid
-    logger.info("SIO received 'run_result' from client '%s'", sid)
-    clients[sid].run_last_result = run_result_details
-    clients[sid].run_last_result_on = datetime.now()
+    except WebSocketDisconnect:
+        logger.info(f"WebSocket client disconnected '{sid}'")
+        if sid in clients:
+            del clients[sid]
+    except Exception as e:
+        logger.exception(f"Unexpected error: {e}")
+        if sid in clients:
+            del clients[sid]
 
 
 def ask_clients_refresh():
-    msg_all_clients("refresh")
+    asyncio.create_task(msg_all_clients("refresh"))
 
 
-scheduler.add_job(ask_clients_refresh, 'interval', seconds=app.config.get("CLIENT_REFRESH_INTERVAL"), max_instances=1)
-flask_scheduler.start()
+scheduler.add_job(ask_clients_refresh, 'interval', seconds=config.CLIENT_REFRESH_INTERVAL, max_instances=1)
+
+
+@app.websocket("/ws")
+async def websocket_endpoint_entrypoint(websocket: WebSocket):
+    await websocket_endpoint(websocket)
+
 
 if __name__ == '__main__':
-    sio.run(app, host=app.config.get("RUN_HOST"), port=app.config.get("RUN_PORT"))
+    import uvicorn
+    uvicorn.run(app, host=config.RUN_HOST, port=config.RUN_PORT)

@@ -1,24 +1,19 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 import asyncio
 import logging
-import socket
 import subprocess
-from os import getenv
+from os import getenv, environ
 from os.path import realpath, dirname, isfile
-import subprocess
 from typing import Dict
-from os import environ
 
-import socketio
+import websockets
+import json
 
 logger = logging.getLogger(__name__)
 
 
-sio = socketio.AsyncClient()
-
-
-async def ws_send_details():
+async def ws_send_details(ws):
     envs: Dict[str, str] = dict(environ)
     data = {}
     for key, command in envs.items():
@@ -26,53 +21,45 @@ async def ws_send_details():
             detail_key = key[len("DETAIL_CMD_#") + 1:].lower()
             result = subprocess.check_output(["bash", "-c", command])
             data[detail_key] = str(result.decode("utf-8").strip())
-    await sio.emit("details", data)
+    await ws.send(json.dumps({"event": "details", "data": data}))
 
 
-@sio.event
-async def refresh():
-    logger.info("WS: 'refresh' received")
-    await ws_send_details()
+async def handle_message(ws, message):
+    data = json.loads(message)
+    event = data.get("event")
+
+    if event == "refresh":
+        logger.info("WS: 'refresh' received")
+        await ws_send_details(ws)
+    elif event == "run":
+        logger.info("WS: 'run' received")
+
+        async def respond(result: bool, message: str):
+            logger.info("Responding to 'run' result")
+            identity: str = data.get("id")
+            await ws.send(json.dumps({"event": "run_result", "data": {"id": identity, "result": result, "message": message}}))
+
+        try:
+            run_script = getenv("RUN_SCRIPT")
+            settings: list = data.get("settings", [])
+            run_args = [run_script] + settings
+            output = subprocess.check_output(run_args)
+        except subprocess.CalledProcessError as exc:
+            await respond(result=False, message=f"code={exc.returncode}; {str(exc)}")
+            return
+        except Exception as exc:
+            await respond(result=False, message=str(exc))
+            return
+
+        await respond(result=True, message=output.decode('utf-8'))
+    elif event == "ping":
+        logger.info("WS: 'ping' received")
+        await ws.send(json.dumps({"event": "pong"}))
 
 
-@sio.event
-async def run(data: dict):
-    logger.info("WS: 'run' received")
-
-    async def respond(result: bool, message: str):
-        logger.info("Responding to 'run' result")
-        identity: str = data.get("id")
-        await sio.emit("run_result", data={"id": identity, "result": result, "message": message})
-
-    try:
-        run_script = getenv("RUN_SCRIPT")
-        settings: list = data.get("settings", [])
-        run_args = [run_script] + settings
-        output = subprocess.check_output(run_args)
-    except subprocess.CalledProcessError as exc:
-        # Since this is being run on a remote machine, we want the full exception
-        # However, it may contain sensitive data!
-        await respond(result=False, message=f"code={exc.returncode}; {str(exc)}")
-        return
-    except Exception as exc:
-        # Since this is being run on a remote machine, we want the full exception
-        # However, it may contain sensitive data!
-        await respond(result=False, message=str(exc))
-        return
-
-    # Success
-    await respond(result=True, message=output)
-
-
-@sio.event
-async def ping():
-    logger.info("WS: 'ping' received")
-    await sio.emit("pong")
-
-
-async def init_details():
-    await sio.sleep(2)
-    await ws_send_details()
+async def init_details(ws):
+    await asyncio.sleep(2)
+    await ws_send_details(ws)
     logger.info("Sent init details")
 
 
@@ -91,9 +78,11 @@ async def main():
     ws_headers = {
         "AUTH_TOKEN": getenv("WS_AUTH_TOKEN", "")
     }
-    await sio.connect(ws_endpoint, headers=ws_headers)
-    sio.start_background_task(init_details)
-    await sio.wait()
+
+    async with websockets.connect(ws_endpoint, extra_headers=ws_headers) as ws:
+        await init_details(ws)
+        async for message in ws:
+            await handle_message(ws, message)
 
 
 if __name__ == "__main__":
