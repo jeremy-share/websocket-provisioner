@@ -1,36 +1,42 @@
 OS_CODENAME = "jammy" # 22.04 LTS
 NUMBER_MACHINES = 1
-LAN_INTERFACE = "wlp2s0"
 MACHINE_PREFIX = "vm-websocket-provisioner-client"
 
-LAN_IP_CMD = "ip a s #{LAN_INTERFACE} | grep 'inet ' | grep -Eo 'inet\\ [0-9\\.]*' | cut -f2 -d' ' | tr -d '\n'"
-LAN_IP = %x[ #{LAN_IP_CMD} ]
+def get_lan_interface
+  interfaces = %x[ip -o link show | awk -F': ' '{print $2}']
+  interfaces.each_line do |interface|
+    interface.strip!
+    next if interface == "lo" || interface == "docker0"
+    ip_cmd = "ip -4 addr show #{interface} | grep -oP '(?<=inet\\s)\\d+(\\.\\d+){3}'"
+    ip = %x[ #{ip_cmd} ].strip
+    return interface unless ip.empty?
+  end
+  nil
+end
+
+LAN_INTERFACE = get_lan_interface
+raise "No LAN interface found!" if LAN_INTERFACE.nil?
+
+LAN_IP_CMD = "ip -4 addr show #{LAN_INTERFACE} | grep -oP '(?<=inet\\s)\\d+(\\.\\d+){3}'"
+LAN_IP = %x[ #{LAN_IP_CMD} ].strip
 
 Vagrant.configure("2") do |config|
 
-  # https://docs.vagrantup.com.
   (1..NUMBER_MACHINES).each do |machine_id|
     config.vm.define "machine#{machine_id}" do |machine|
       machine_name = "#{MACHINE_PREFIX}-#{machine_id}"
-      # Set a hostname
       machine.vm.hostname = machine_name
+      config.vm.box = "ubuntu/#{OS_CODENAME}64"
 
-      # Base Box
-      config.vm.box = "ubuntu/" + OS_CODENAME + "64"
-
-      # provider
       config.vm.provider "virtualbox" do |vb|
         vb.memory = "1024"
         vb.cpus = 2
         vb.customize ["modifyvm", :id, "--cpuexecutioncap", "80"]
       end
 
-      # Provisioner
-      # Only execute once the Ansible provisioner, when all the machines are up and ready.
-      # https://developer.hashicorp.com/vagrant/docs/provisioning/ansible
       if machine_id == NUMBER_MACHINES
         config.vm.provision "ansible" do |ansible|
-          ansible.limit = "all" # Disable default limit to connect to all the machines
+          ansible.limit = "all"
           ansible.playbook = "ansible-playbook.yml"
           ansible.extra_vars = {
             "websocket_provisioner_ws_endpoint": "ws://#{LAN_IP}",

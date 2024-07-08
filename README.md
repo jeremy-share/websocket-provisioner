@@ -1,14 +1,18 @@
 # Websocket-provisioner
-Provisioning devices using a Websocket. The aim of this project is to be able to flash ESPs and provision servers
-then set what they will be running later.
 
-i.e. `BaseFirmware` / `ISO with simple Websocket` and then over Websocket set details and project etc 
+Provisioning hosts using a Websocket. 
+The idea is to have a simple script like application that can later tell the device its specific setup instructions.
 
 
-## Running
+## Usage
+### Running
 
 * `make demo-start`
 
-## Stopping
+### Stopping
 
 * `make demo-stop`
+
+## Future ideas
+* Adding the client to an ISO and then over Websocket set details and project etc.
+* Add ESP32/8266 support.

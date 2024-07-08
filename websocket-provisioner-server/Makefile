@@ -6,3 +6,9 @@ up:
 
 down:
 	docker compose down
+
+client-list:
+	./bin/development/clients-txt.sh
+
+client-run:
+	./bin/development/client-run.sh
